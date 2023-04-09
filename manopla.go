@@ -1,11 +1,15 @@
 package main
 
 import (
+	"embed"
 	"flag"
 	"fmt"
 	"math/rand"
-	"os/exec"
 	"time"
+
+	"github.com/faiface/beep"
+	"github.com/faiface/beep/mp3"
+	"github.com/faiface/beep/speaker"
 )
 
 type move struct {
@@ -20,6 +24,9 @@ type move struct {
 	// significa que o movimento nunca poderá aparecer
 	prob float64
 }
+
+//go:embed sound
+var fs embed.FS
 
 var possibleMoves = []move{
 	{name: "jab", front: true, back: false},
@@ -42,6 +49,12 @@ func main() {
 	flag.DurationVar(&interval, "intervalo", 1*time.Second, "Intervalo entre as séries")
 	flag.Parse()
 	rand.Seed(2)
+
+	sr := beep.SampleRate(48000)
+	err := speaker.Init(sr, sr.N(time.Second/10))
+	if err != nil {
+		panic(err)
+	}
 
 	isFront := true
 
@@ -147,7 +160,25 @@ func nextMove(moves []move, count int, isFront bool) move {
 }
 
 func playAudio(name string) error {
-	cmd := exec.Command("ffplay", "-nodisp", "-autoexit", "-i", "./sound/"+name+".mp3")
-	cmd.Dir = "."
-	return cmd.Run()
+	f, err := fs.Open("sound/" + name + ".mp3")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	streamer, _, err := mp3.Decode(f)
+	if err != nil {
+		return err
+	}
+	defer streamer.Close()
+
+	done := make(chan struct{})
+
+	speaker.Play(beep.Seq(streamer, beep.Callback(func() {
+		done <- struct{}{}
+	})))
+
+	<-done
+
+	return nil
 }
