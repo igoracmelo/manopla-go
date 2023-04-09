@@ -44,9 +44,9 @@ var count int
 var interval time.Duration
 
 func main() {
-	flag.IntVar(&level, "nivel", 0, "Nível de dificuldade dos movimentos. '0' (padrão) habilita todos os movimentos")
-	flag.IntVar(&count, "num", 2, "Número de movimentos por série. Padrão: 2")
-	flag.DurationVar(&interval, "intervalo", 1*time.Second, "Intervalo entre as séries")
+	flag.IntVar(&level, "l", 0, "Nível de dificuldade dos movimentos. '0' (padrão) habilita todos os movimentos")
+	flag.IntVar(&count, "n", 2, "Número de movimentos por série. Padrão: 2")
+	flag.DurationVar(&interval, "t", 1*time.Second, "Intervalo entre as séries")
 	flag.Parse()
 	rand.Seed(2)
 
