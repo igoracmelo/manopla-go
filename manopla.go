@@ -58,12 +58,7 @@ func main() {
 
 	isFront := true
 
-	if level != 0 {
-		if level+1 >= len(possibleMoves) {
-			level = len(possibleMoves) - 2
-		}
-		possibleMoves = possibleMoves[:level+1]
-	}
+	applyLevel()
 
 	for {
 		moves := []move{}
@@ -181,4 +176,24 @@ func playAudio(name string) error {
 	<-done
 
 	return nil
+}
+
+// o `level` define quais movimentos irão aparecer durante o treino.
+// `level` = 0 (padrão) significa que todos os movimentos poderão parecer.
+// `level` = 1 significa que somente os dois primeiros movimentos irão aparecer (jab e direto).
+// `level` = 2 significa que os 3 primeiros movimentos irão aparecer.
+// etc
+func applyLevel() {
+	// level 0 = todos os movimentos são permitidos
+	if level <= 0 {
+		return
+	}
+
+	level++
+	maxLevel := len(possibleMoves) - 1
+	if level > maxLevel {
+		level = maxLevel
+	}
+
+	possibleMoves = possibleMoves[:level]
 }
