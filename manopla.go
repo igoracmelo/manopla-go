@@ -4,7 +4,9 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand"
+	"os"
 	"time"
 
 	"github.com/faiface/beep"
@@ -25,30 +27,47 @@ type move struct {
 	prob float64
 }
 
+type rule func(move) bool
+
+type globalOptions struct {
+	maxDistinct int
+	seqSize     int
+	onlyArm     bool
+	onlyLeg     bool
+	interval    time.Duration
+}
+
+type rulesOptions struct {
+	isFront       bool
+	previousMoves []move
+	seqSize       int
+}
+
 //go:embed sound
 var fs embed.FS
 
-var possibleMoves = []move{
-	{name: "jab", front: true, back: false},
-	{name: "direto", front: false, back: true},
-	{name: "cruza", front: true, back: true, prob: 0.5},
-	{name: "chuta", front: true, back: true, leg: true},
-	{name: "tip", front: true, back: true, leg: true, prob: 0.5},
-	{name: "upper", front: true, back: true, prob: 0.5},
-	{name: "cotovelo", front: true, back: true, prob: 0.5},
-	{name: "joelho", front: true, back: true, leg: true},
-}
-
-var level int
-var count int
-var interval time.Duration
-
 func main() {
-	flag.IntVar(&level, "l", 0, "Nível de dificuldade dos movimentos. '0' (padrão) habilita todos os movimentos")
-	flag.IntVar(&count, "n", 2, "Número de movimentos por série. Padrão: 2")
-	flag.DurationVar(&interval, "t", 1*time.Second, "Intervalo entre as séries")
+	o := globalOptions{}
+	flag.IntVar(&o.maxDistinct, "d", 0, "Número de movimentos distintos. 0 permite todos os movimentos")
+	flag.IntVar(&o.seqSize, "n", 2, "Número de movimentos por série")
+	flag.BoolVar(&o.onlyLeg, "ol", false, "Permitir apenas golpes de perna")
+	flag.BoolVar(&o.onlyArm, "oa", false, "Permitir apenas golpes de braço")
+	flag.DurationVar(&o.interval, "t", 1*time.Second, "Intervalo entre as séries")
 	flag.Parse()
 	rand.Seed(2)
+
+	var possibleMoves = []move{
+		{name: "jab", front: true, back: false},
+		{name: "direto", front: false, back: true},
+		{name: "cruza", front: true, back: true, prob: 0.3},
+		{name: "chuta", front: true, back: true, leg: true},
+		{name: "tip", front: true, back: true, leg: true, prob: 0.5},
+		{name: "upper", front: true, back: true, prob: 0.3},
+		{name: "cotovelo", front: true, back: true, prob: 0.5},
+		{name: "joelho", front: true, back: true, leg: true, prob: 0.5},
+	}
+
+	possibleMoves = applyGlobalOptions(possibleMoves, o)
 
 	sr := beep.SampleRate(48000)
 	err := speaker.Init(sr, sr.N(time.Second/10))
@@ -58,9 +77,17 @@ func main() {
 
 	isFront := true
 
-	applyLevel()
+	finish := make(chan struct{})
+	go func() {
+		_, err := os.Stdin.Read([]byte{0})
+		if err != nil {
+			log.Println(err)
+		}
+		close(finish)
+	}()
 
 	for {
+
 		moves := []move{}
 		s := ""
 		if isFront {
@@ -69,8 +96,12 @@ func main() {
 			s += "T:"
 		}
 
-		for i := 0; i < count; i++ {
-			move := nextMove(moves, count, isFront)
+		for i := 0; i < o.seqSize; i++ {
+			move := nextMove(possibleMoves, rulesOptions{
+				previousMoves: moves,
+				seqSize:       o.seqSize,
+				isFront:       isFront,
+			})
 			moves = append(moves, move)
 			isFront = !isFront
 			s += " " + move.name
@@ -85,59 +116,85 @@ func main() {
 			}
 		}
 
-		time.Sleep(interval)
+		select {
+		case <-finish:
+			return
+		case <-time.After(o.interval):
+		}
 	}
 }
 
-func nextMove(moves []move, count int, isFront bool) move {
-	type rule func(move) bool
+func applyGlobalOptions(moves []move, o globalOptions) []move {
+	result := []move{}
 
+	for _, m := range moves {
+		if o.onlyLeg && !m.leg {
+			continue
+		}
+
+		if o.onlyArm && m.leg {
+			continue
+		}
+
+		if !o.onlyLeg && m.leg && (o.seqSize > 1 && o.seqSize < 4) {
+			continue
+		}
+
+		result = append(result, m)
+	}
+
+	if o.maxDistinct != 0 && len(result) > o.maxDistinct {
+		result = result[:o.maxDistinct]
+	}
+
+	return result
+}
+
+func nextMove(possibleMoves []move, o rulesOptions) move {
 	rules := []rule{}
-
-	rules = append(rules, func(m move) bool {
-		p := rand.Float64()
-		return m.prob <= p
-	})
+	rules = append(rules, probabilityRule)
 
 	// somente movimentos permitidos para aquele lado, ex:
 	// jab só na frente, direto só com o braço de trás
-	if isFront {
-		rules = append(rules, func(m move) bool {
-			return m.front
-		})
+	if o.isFront {
+		rules = append(rules, frontRule)
 	} else {
-		rules = append(rules, func(m move) bool {
-			return m.back
-		})
+		rules = append(rules, backRule)
 	}
 
 	hasLeg := false
+	hasArm := false
+
 	for _, m := range possibleMoves {
 		if m.leg {
 			hasLeg = true
-			break
+		} else {
+			hasArm = true
 		}
 	}
 
-	if hasLeg {
+	if hasLeg && hasArm {
 		// exigir perna somente para *ultimo* golpe quando forem 4 ou mais movimentos
 		// caso contrário, proibir perna caso não seja uma série de 1 só movimento
-		if count >= 4 && len(moves) == count-1 {
-			rules = append(rules, func(m move) bool {
-				return m.leg
-			})
-		} else if count != 1 {
-			rules = append(rules, func(m move) bool {
-				return !m.leg
-			})
+		if o.seqSize >= 4 && len(o.previousMoves) == o.seqSize-1 {
+			rules = append(rules, mustBeLegRule)
+		} else if o.seqSize != 1 {
+			rules = append(rules, mustNotBeLegRule)
 		}
 	}
 
+	allowedMoves := applyRules(possibleMoves, rules)
+	i := rand.Intn(len(allowedMoves))
+	return allowedMoves[i]
+}
+
+func applyRules(possibleMoves []move, rules []rule) []move {
 	allowedMoves := []move{}
 
 	// filtra os movimentos de acordo com as regras
 	for _, m := range possibleMoves {
 		pass := true
+
 		for _, r := range rules {
 			if !r(m) {
 				pass = false
@@ -150,8 +207,7 @@ func nextMove(moves []move, count int, isFront bool) move {
 		}
 	}
 
-	i := rand.Intn(len(allowedMoves))
-	return allowedMoves[i]
+	return allowedMoves
 }
 
 func playAudio(name string) error {
@@ -183,17 +239,24 @@ func playAudio(name string) error {
 // `level` = 1 significa que somente os dois primeiros movimentos irão aparecer (jab e direto).
 // `level` = 2 significa que os 3 primeiros movimentos irão aparecer.
 // etc
-func applyLevel() {
-	// level 0 = todos os movimentos são permitidos
-	if level <= 0 {
-		return
-	}
 
-	level++
-	maxLevel := len(possibleMoves) - 1
-	if level > maxLevel {
-		level = maxLevel
-	}
+func probabilityRule(m move) bool {
+	p := rand.Float64()
+	return m.prob <= p
+}
 
-	possibleMoves = possibleMoves[:level]
+func frontRule(m move) bool {
+	return m.front
+}
+
+func backRule(m move) bool {
+	return m.back
+}
+
+func mustBeLegRule(m move) bool {
+	return m.leg
+}
+
+func mustNotBeLegRule(m move) bool {
+	return !m.leg
 }
